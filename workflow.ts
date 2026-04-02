@@ -1,60 +1,46 @@
-import {
-  createWorkflow,
-  type WorkflowExecutionContext,
-  SequenceNodeBuilder,
-  ToolNodeBuilder,
-} from '@jshookmcp/extension-sdk/workflow';
+import type { WorkflowContract } from '@jshookmcp/extension-sdk/workflow';
+import { toolNode, sequenceNode, branchNode } from '@jshookmcp/extension-sdk/workflow';
 
 const workflowId = 'workflow.temp-mail-open-latest.v1';
 
-export default createWorkflow(workflowId, 'Temp Mail Open Latest')
-  .description(
+const tempMailOpenLatestWorkflow: WorkflowContract = {
+  kind: 'workflow-contract',
+  version: 1,
+  id: workflowId,
+  displayName: 'Temp Mail Open Latest',
+  description:
     'Navigate a temporary mailbox, optionally refresh it, and open the latest relevant message using configurable selectors and matching rules.',
-  )
-  .tags(['workflow', 'mailbox', 'email', 'temp-mail', 'automation'])
-  .timeoutMs(3 * 60_000)
-  .defaultMaxConcurrency(1)
-  .buildGraph((ctx: WorkflowExecutionContext) => {
+  tags: ['workflow', 'mailbox', 'email', 'temp-mail', 'automation'],
+  timeoutMs: 3 * 60_000,
+  defaultMaxConcurrency: 1,
+
+  build(ctx) {
     const prefix = 'workflows.tempMailOpenLatest';
-    const mailboxUrl = String(
-      ctx.getConfig(`${prefix}.mailboxUrl`, 'https://example.com/mailbox'),
-    );
-    const waitUntil = String(ctx.getConfig(`${prefix}.waitUntil`, 'networkidle'));
-    const readySelector = String(ctx.getConfig(`${prefix}.readySelector`, 'body'));
-    const timeoutMs = Number(ctx.getConfig(`${prefix}.timeoutMs`, 60_000));
-    const refreshSelector = String(ctx.getConfig(`${prefix}.refreshSelector`, ''));
-    const refreshWaitMs = Number(ctx.getConfig(`${prefix}.refreshWaitMs`, 1500));
-    const itemSelector = String(ctx.getConfig(`${prefix}.itemSelector`, 'a[href]'));
-    const hrefIncludes = String(ctx.getConfig(`${prefix}.hrefIncludes`, '/mail/view/'));
-    const hrefRegex = String(ctx.getConfig(`${prefix}.hrefRegex`, ''));
-    const textIncludes = String(ctx.getConfig(`${prefix}.textIncludes`, ''));
-    const textRegex = String(ctx.getConfig(`${prefix}.textRegex`, ''));
-    const openOrder = String(ctx.getConfig(`${prefix}.openOrder`, 'first'));
+    const mailboxUrl = ctx.getConfig<string>(`${prefix}.mailboxUrl`, 'https://example.com/mailbox');
+    const waitUntil = ctx.getConfig<string>(`${prefix}.waitUntil`, 'domcontentloaded');
+    const readySelector = ctx.getConfig<string>(`${prefix}.readySelector`, 'body');
+    const timeoutMs = ctx.getConfig<number>(`${prefix}.timeoutMs`, 60_000);
+    const refreshSelector = ctx.getConfig<string>(`${prefix}.refreshSelector`, '');
+    const refreshWaitMs = ctx.getConfig<number>(`${prefix}.refreshWaitMs`, 1500);
+    const itemSelector = ctx.getConfig<string>(`${prefix}.itemSelector`, 'a[href]');
+    const hrefIncludes = ctx.getConfig<string>(`${prefix}.hrefIncludes`, '/mail/view/');
+    const hrefRegex = ctx.getConfig<string>(`${prefix}.hrefRegex`, '');
+    const textIncludes = ctx.getConfig<string>(`${prefix}.textIncludes`, '');
+    const textRegex = ctx.getConfig<string>(`${prefix}.textRegex`, '');
+    const openOrder = ctx.getConfig<string>(`${prefix}.openOrder`, 'first');
 
-    const root = new SequenceNodeBuilder('temp-mail-open-latest-root');
-
-    root
-      .tool('navigate-mailbox', 'page_navigate', {
-        input: {
-          url: mailboxUrl,
-          waitUntil,
-          timeout: timeoutMs,
-          enableNetworkMonitoring: true,
-        },
-      })
-      .tool('wait-mailbox-ready', 'page_wait_for_selector', {
-        input: {
-          selector: readySelector,
-          timeout: timeoutMs,
-        },
-      })
-      .branch('maybe-refresh-mailbox', 'temp_mail_open_latest_enable_refresh', (b) => {
-        b.predicateFn(() => Boolean(refreshSelector))
-          .whenTrue(
-            new SequenceNodeBuilder('refresh-sequence')
-              .tool('refresh-mailbox', 'page_evaluate', {
-                input: {
-                  code: `(function(){
+    return sequenceNode('temp-mail-open-latest-root')
+      .step(toolNode('navigate-mailbox', 'page_navigate').input({
+        url: mailboxUrl, waitUntil, timeout: timeoutMs, enableNetworkMonitoring: true,
+      }))
+      .step(toolNode('wait-mailbox-ready', 'page_wait_for_selector').input({
+        selector: readySelector, timeout: timeoutMs,
+      }))
+      .step(branchNode('maybe-refresh-mailbox', 'temp_mail_open_latest_enable_refresh')
+        .predicateFn(() => Boolean(refreshSelector))
+        .whenTrue(sequenceNode('refresh-sequence')
+          .step(toolNode('refresh-mailbox', 'page_evaluate').input({
+            code: `(function(){
               const target = document.querySelector(${JSON.stringify(refreshSelector)});
               if (!target) {
                 return { refreshed: false, reason: 'refresh_target_not_found', selector: ${JSON.stringify(refreshSelector)} };
@@ -65,25 +51,15 @@ export default createWorkflow(workflowId, 'Temp Mail Open Latest')
               }
               return { refreshed: false, reason: 'refresh_target_not_clickable', selector: ${JSON.stringify(refreshSelector)} };
             })()`,
-                },
-              })
-              .tool('wait-after-refresh', 'page_evaluate', {
-                input: {
-                  code: `new Promise(resolve => setTimeout(() => resolve({ waitedMs: ${Math.max(0, refreshWaitMs)} }), ${Math.max(0, refreshWaitMs)}))`,
-                },
-                timeoutMs: Math.max(5_000, refreshWaitMs + 2_000),
-              }),
-          )
-          .whenFalse(
-            new ToolNodeBuilder('skip-refresh-mailbox', 'console_execute').input({
-              expression:
-                '({ skipped: true, step: "refresh_mailbox", reason: "refreshSelector not configured" })',
-            }),
-          );
-      })
-      .tool('open-latest-relevant-mail', 'page_evaluate', {
-        input: {
-          code: `(function(){
+          }))
+          .step(toolNode('wait-after-refresh', 'page_evaluate')
+            .input({ code: `new Promise(resolve => setTimeout(() => resolve({ waitedMs: ${Math.max(0, refreshWaitMs)} }), ${Math.max(0, refreshWaitMs)}))` })
+            .timeout(Math.max(5_000, refreshWaitMs + 2_000))))
+        .whenFalse(toolNode('skip-refresh-mailbox', 'console_execute').input({
+          expression: '({ skipped: true, step: "refresh_mailbox", reason: "refreshSelector not configured" })',
+        })))
+      .step(toolNode('open-latest-relevant-mail', 'page_evaluate').input({
+        code: `(function(){
           const anchors = Array.from(document.querySelectorAll(${JSON.stringify(itemSelector)}));
           const hrefIncludes = ${JSON.stringify(hrefIncludes)};
           const hrefRegexRaw = ${JSON.stringify(hrefRegex)};
@@ -127,52 +103,34 @@ export default createWorkflow(workflowId, 'Temp Mail Open Latest')
 
           window.location.href = href;
           return {
-            opened: true,
-            href,
-            text,
+            opened: true, href, text,
             matchCount: matches.length,
             totalAnchors: anchors.length,
             order
           };
         })()`,
-        },
-      })
-      .tool('emit-summary', 'console_execute', {
-        input: {
-          expression: `(${JSON.stringify({
-            workflowId,
-            mailboxUrl,
-            readySelector,
-            refreshSelector,
-            itemSelector,
-            hrefIncludes,
-            hrefRegex,
-            textIncludes,
-            textRegex,
-            openOrder,
-            status: 'temp_mail_open_latest_complete',
-          })})`,
-        },
-      });
+      }))
+      .step(toolNode('emit-summary', 'console_execute').input({
+        expression: `(${JSON.stringify({
+          workflowId, mailboxUrl, readySelector, refreshSelector,
+          itemSelector, hrefIncludes, hrefRegex, textIncludes, textRegex, openOrder,
+          status: 'temp_mail_open_latest_complete',
+        })})`,
+      }))
+      .build();
+  },
 
-    return root;
-  })
-  .onStart((ctx) => {
-    ctx.emitMetric('workflow_runs_total', 1, 'counter', {
-      workflowId,
-      stage: 'start',
-    });
-  })
-  .onFinish((ctx) => {
-    ctx.emitMetric('workflow_runs_total', 1, 'counter', {
-      workflowId,
-      stage: 'finish',
-    });
-  })
-  .onError((ctx, error) => {
-    ctx.emitMetric('workflow_errors_total', 1, 'counter', {
-      workflowId,
-      error: error.name,
-    });
-  })
-  .build();
+  onStart(ctx) {
+    ctx.emitMetric('workflow_runs_total', 1, 'counter', { workflowId, stage: 'start' });
+  },
+
+  onFinish(ctx) {
+    ctx.emitMetric('workflow_runs_total', 1, 'counter', { workflowId, stage: 'finish' });
+  },
+
+  onError(ctx, error) {
+    ctx.emitMetric('workflow_errors_total', 1, 'counter', { workflowId, error: error.name });
+  },
+};
+
+export default tempMailOpenLatestWorkflow;

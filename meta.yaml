@@ -1,0 +1,4 @@
+name: temp-mail-open-latest
+description: Declarative workflow for opening the latest relevant message in a temporary mailbox.
+author: vmoranv
+source_repo: https://github.com/vmoranv/jshook_workflow_temp_mail_open_latest
